@@ -25,7 +25,8 @@ because the `depot` distribution on PyPI is an abandoned 2014 package and the
 
 A dataset's identity is its path under the datasets root: folders are the type,
 the file is the name, a colon between them. `datasets/reports/balance.py` is
-`reports:balance`, and the folders nest as deep as you like.
+`reports:balance`, and the folders nest as deep as you like. The name and type 
+can also be defined explicitly through the corresponding properties.
 
 ```python
 """What every account currently holds, standard and virtual side by side."""
