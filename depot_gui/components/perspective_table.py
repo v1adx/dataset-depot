@@ -70,6 +70,51 @@ HEAD = Template("""
 <style>
   perspective-viewer { width: 100%; height: 100%; min-height: 0; flex: 1 1 auto; }
 </style>
+<script>
+// navigator.clipboard is [SecureContext] only, and this app is served over
+// plain http on a LAN address — so the viewer's Copy button reaches for an API
+// that is not there and silently does nothing. Perspective builds a
+// ClipboardItem and calls clipboard.write([item]); both halves are stubbed
+// here. Classic script on purpose: the module below is deferred, and the
+// bundle reads window.ClipboardItem once, as it evaluates.
+//
+// A detached div rather than a textarea because a textarea has to be focused
+// to be selected, and focusing anything outside the dialog hands the Quasar
+// focus trap a reason to pull focus back mid-copy. A Range needs no focus.
+//
+// ponytail: execCommand("copy") rides the click's transient activation, ~5s in
+// Chrome and Firefox — an export that takes longer to serialise than that
+// misses the window. Serve over https if that ever starts to bite.
+if (!navigator.clipboard) {
+    window.ClipboardItem = function (parts) { this.parts = parts; };
+    Object.defineProperty(navigator, "clipboard", {value: {
+        write: async function (items) {
+            var parts = items[0].parts;
+            var payload = parts["text/plain"] || parts[Object.keys(parts)[0]];
+            var text = payload instanceof Blob ? await payload.text() : String(payload);
+            var host = document.createElement("div");
+            host.textContent = text;
+            // Off-screen, not display:none — a box with no layout has nothing
+            // to select, and the copy would come back empty.
+            host.style.cssText = "position:fixed;left:-9999px;top:0;white-space:pre;";
+            document.body.appendChild(host);
+            var selection = getSelection();
+            var previous = selection.rangeCount ? selection.getRangeAt(0) : null;
+            var range = document.createRange();
+            range.selectNodeContents(host);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            try {
+                if (!document.execCommand("copy")) throw new Error("execCommand copy refused");
+            } finally {
+                selection.removeAllRanges();
+                if (previous) selection.addRange(previous);
+                host.remove();
+            }
+        },
+    }});
+}
+</script>
 <script type="module">
 import "$cdn/viewer@$version/dist/cdn/perspective-viewer.js";
 import "$cdn/viewer-datagrid@$version/dist/cdn/perspective-viewer-datagrid.js";

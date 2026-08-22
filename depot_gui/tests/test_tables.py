@@ -111,6 +111,15 @@ def test_a_table_name_survives_a_dataset_key():
     assert perspective_table.table_name("staging:daily_sales") == "staging_daily_sales"
 
 
+def test_perspective_shims_the_clipboard_before_the_bundle_reads_it():
+    """The viewer is served over plain http on a LAN address, where
+    navigator.clipboard does not exist and Copy silently does nothing. The
+    bundle reads window.ClipboardItem once as it evaluates, and a module script
+    is deferred — so the classic shim script has to come first in the head."""
+    head = perspective_table.HEAD
+    assert head.index("window.ClipboardItem =") < head.index('<script type="module">')
+
+
 # --- Pivot (pivottable.js) ---
 
 def test_pivot_stringifies_every_value():
