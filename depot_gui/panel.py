@@ -7,9 +7,9 @@ from nicegui import ui
 from depot import Dataset, Decision
 
 from .catalog import Catalog, render
+from .errors import describe
 from .settings import active
 from .views import ViewStore
-from .widgets.fullscreen_dialog import FullscreenDialog
 from .components.meta_card import DatasetMetaCard
 from .components.dataset_table import DatasetTable
 from .components.views_bar import ViewsBar
@@ -36,7 +36,6 @@ class DatasetPanel:
             self._spinner = ui.spinner(size="lg").classes("m-auto")
 
             with ui.column().classes("w-full gap-3 overflow-x-hidden") as self._content:
-                self._dialog = FullscreenDialog()
                 store = ViewStore(active().state / "views")
 
                 self._meta = DatasetMetaCard(
@@ -44,7 +43,7 @@ class DatasetPanel:
                     on_tabulator=self._open_tabulator,
                     catalog=self._catalog,
                 )
-                self._views = ViewsBar(self._meta.views_row, self._dialog, store)
+                self._views = ViewsBar(self._meta.views_row, store)
                 self._table = DatasetTable(store)
 
         self._set_state("empty")
@@ -87,10 +86,11 @@ class DatasetPanel:
             # The dataset just selected has no valid data to show: fall back
             # to empty rather than leave the previous dataset's tables on
             # screen under the new one's identity.
-            ui.notify(f"Pipeline failed: {exc}", type="negative")
+            detail = describe(exc, f"pipeline failed: {key}")
+            ui.notify(f"Pipeline failed — {key}: {detail}", type="negative")
             self._emit("failed", None)
             self._decisions = []
-            self._last_error = f"{key}: {exc}"
+            self._last_error = f"{key}: {detail}"
             self._dts = None
             self._set_state("empty")
 
@@ -103,10 +103,11 @@ class DatasetPanel:
         except Exception as exc:
             # The dataset on screen is still the one the user is looking at;
             # its previously loaded data is still valid, so stay put.
-            ui.notify(f"Pipeline failed: {exc}", type="negative")
+            detail = describe(exc, f"pipeline failed: {key}")
+            ui.notify(f"Pipeline failed — {key}: {detail}", type="negative")
             self._emit("failed", None)
             self._decisions = []
-            self._last_error = f"{key}: {exc}"
+            self._last_error = f"{key}: {detail}"
             self._set_state("loaded")
 
     def current_key(self) -> str | None:
@@ -151,7 +152,8 @@ class DatasetPanel:
         try:
             self._refresh_all()
         except Exception as exc:
-            ui.notify(f"Could not render {key}: {exc}", type="negative")
+            ui.notify(f"Could not render {key}: {describe(exc, f'render failed: {key}')}",
+                      type="negative")
         self._set_state("loaded")
 
     def _set_state(self, state: str) -> None:

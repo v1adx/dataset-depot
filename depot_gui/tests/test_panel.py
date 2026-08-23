@@ -207,3 +207,26 @@ async def test_a_failure_outranks_the_previous_run_in_the_log():
     with patch("nicegui.ui.notify"):
         await panel.select("source:records")
     assert panel.last_log().startswith("run failed")
+
+
+# --- the failure message says what actually failed ---
+
+async def test_a_keyerror_is_reported_with_its_type_not_just_its_key():
+    """`Pipeline failed: 'Name'` was the whole popup: str(KeyError) is the key
+    alone, and the traceback died in the except block."""
+    def boom():
+        {}["Name"]
+
+    try:
+        boom()
+    except KeyError as exc:
+        raised = exc
+
+    panel = make_panel(FakeCatalog(raises=raised))
+    with patch("nicegui.ui.notify") as notify:
+        await panel.select("source:records")
+    message = notify.call_args[0][0]
+    assert "KeyError: 'Name'" in message
+    assert "source:records" in message
+    assert "in boom at test_panel.py:" in message
+    assert "KeyError" in panel.last_log()

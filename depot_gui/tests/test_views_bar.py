@@ -1,13 +1,14 @@
-"""The one handler that writes a view's settings, without a page.
+"""The two pieces of the views row that work without a page: the URL a view
+button points at, and the handler that writes a view's settings.
 
-`ViewsBar.__init__` builds widgets and subscribes to an event, neither of which
-the saving logic needs. Constructing through `object.__new__` and giving it the
-two attributes `_save` actually touches exercises the real code with no
-widgets involved — the same approach `test_panel.py` takes.
+Neither needs widgets, so neither is tested through them. `save_config` is a
+plain function precisely because the page that receives the event and the row
+that lists the views are no longer the same client — see the module docstring
+of views_bar.
 """
 from types import SimpleNamespace
 
-from depot_gui.components.views_bar import KINDS, ViewsBar
+from depot_gui.components.views_bar import KINDS, save_config, view_url
 from depot_gui.views import ViewStore
 
 
@@ -16,11 +17,8 @@ def event(payload):
     return SimpleNamespace(args=payload)
 
 
-def bar(tmp_path) -> ViewsBar:
-    obj = object.__new__(ViewsBar)
-    obj._store = ViewStore(tmp_path / "views")
-    obj._dts = None
-    return obj
+def store(tmp_path) -> ViewStore:
+    return ViewStore(tmp_path / "views")
 
 
 def test_every_offered_kind_is_a_component():
@@ -31,43 +29,61 @@ def test_every_offered_kind_is_a_component():
 
 
 def test_the_column_picker_is_not_on_offer():
-    """It has no dialog, so [+] must not offer it."""
+    """It draws inline under the meta card, so [+] must not offer it."""
     assert "columns" not in KINDS
 
 
+# --- The link a view opens in ---
+
+def test_a_view_opens_on_the_page_of_its_own_dataset():
+    assert view_url("staging:sales", "ab12cd") == "/dts/staging:sales?view=ab12cd"
+
+
+def test_a_nested_key_keeps_its_slash():
+    """The route takes the key as `{key:path}`, so a slash is part of it and
+    must not be folded away: store/helper:a and store:helper_a are two
+    datasets."""
+    assert view_url("store/helper:a", "ab12cd") == "/dts/store/helper:a?view=ab12cd"
+
+
+# --- Saving a layout ---
+
 def test_a_config_is_saved_against_the_view_the_browser_named(tmp_path):
-    b = bar(tmp_path)
-    view = b._store.add("staging:sales", "pivot", "Pivot")
-    b._save(event({"key": "staging:sales", "view": view.id, "config": {"rows": ["a"]}}))
-    assert b._store.config("staging:sales", view.id) == {"rows": ["a"]}
+    s = store(tmp_path)
+    view = s.add("staging:sales", "pivot", "Pivot")
+    save_config(s, event({"key": "staging:sales", "view": view.id,
+                          "config": {"rows": ["a"]}}))
+    assert s.config("staging:sales", view.id) == {"rows": ["a"]}
 
 
 def test_a_config_wrapped_in_a_list_is_saved_too(tmp_path):
     """Some nicegui versions hand the handler [payload] rather than payload."""
-    b = bar(tmp_path)
-    view = b._store.add("staging:sales", "pivot", "Pivot")
-    b._save(event([{"key": "staging:sales", "view": view.id, "config": {"rows": ["a"]}}]))
-    assert b._store.config("staging:sales", view.id) == {"rows": ["a"]}
+    s = store(tmp_path)
+    view = s.add("staging:sales", "pivot", "Pivot")
+    save_config(s, event([{"key": "staging:sales", "view": view.id,
+                           "config": {"rows": ["a"]}}]))
+    assert s.config("staging:sales", view.id) == {"rows": ["a"]}
 
 
-def test_a_stale_dialog_writes_to_its_own_dataset_not_the_current_one(tmp_path):
-    """A dialog left open on one dataset while the panel moved to another. The
-    payload names its own destination, so there is nothing to get wrong."""
-    b = bar(tmp_path)
-    old = b._store.add("staging:old", "pivot", "Pivot")
-    current = b._store.add("staging:sales", "pivot", "Pivot")
-    b._save(event({"key": "staging:old", "view": old.id, "config": {"rows": ["b"]}}))
-    assert b._store.config("staging:old", old.id) == {"rows": ["b"]}
-    assert b._store.config("staging:sales", current.id) == {}
+def test_a_view_tab_writes_to_its_own_dataset_not_whichever_is_on_the_graph(tmp_path):
+    """A view is its own page now, so the tab that emits and the graph that
+    lists the views are different clients. The payload names its own
+    destination, which is what keeps them from drifting apart."""
+    s = store(tmp_path)
+    old = s.add("staging:old", "pivot", "Pivot")
+    current = s.add("staging:sales", "pivot", "Pivot")
+    save_config(s, event({"key": "staging:old", "view": old.id,
+                          "config": {"rows": ["b"]}}))
+    assert s.config("staging:old", old.id) == {"rows": ["b"]}
+    assert s.config("staging:sales", current.id) == {}
 
 
 def test_an_event_without_a_key_is_ignored(tmp_path):
-    b = bar(tmp_path)
-    b._save(event({"view": "abc", "config": {"rows": ["a"]}}))
+    save_config(store(tmp_path), event({"view": "abc", "config": {"rows": ["a"]}}))
     assert not (tmp_path / "views").exists()
 
 
 def test_an_event_without_a_view_is_ignored(tmp_path):
-    b = bar(tmp_path)
-    b._save(event({"key": "staging:sales", "config": {"rows": ["a"]}}))
+    save_config(store(tmp_path), event({"key": "staging:sales",
+                                        "config": {"rows": ["a"]}}))
     assert not (tmp_path / "views").exists()

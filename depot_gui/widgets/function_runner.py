@@ -13,6 +13,7 @@ from nicegui import ui
 
 from depot import Dataset
 
+from ..errors import describe
 from ..settings import active
 
 _STATIC_ROUTE = "/artifacts"
@@ -195,6 +196,7 @@ class FunctionRunner:
             ui.notify(f"{func.__name__} completed", type="positive")
         except Exception as exc:
             _drain()
-            self._log.push(f"\n[ERROR] {exc}")
+            detail = describe(exc, f"{func.__name__} failed")
+            self._log.push(f"\n[ERROR] {detail}")
             self._status.set_visibility(False)
-            ui.notify(f"{func.__name__} failed: {exc}", type="negative")
+            ui.notify(f"{func.__name__} failed: {detail}", type="negative")

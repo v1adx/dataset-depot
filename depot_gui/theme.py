@@ -14,6 +14,10 @@ NODE_SPACING = 100
 TOOLTIP_MAX_WIDTH = 320
 SPLITTER_DEFAULT = 60
 
+# The thin bar every page above the graph wears: title on the left, that
+# page's service buttons on the right.
+HEADER_HEIGHT = 40
+
 TABLE_DEFAULT_PAGE_SIZE = 16
 TABLE_PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 0]
 TABLE_COLUMN_MIN_WIDTH = 40

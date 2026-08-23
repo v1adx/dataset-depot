@@ -1,4 +1,4 @@
-"""Two pages and the entry point.
+"""Three pages and the entry point.
 
 Everything that knows about routes is gathered here: the package hands out one
 function, start(), and the components have no idea the pages exist.
@@ -17,10 +17,12 @@ from .catalog import Catalog
 from .components.tabulator_filter import TabulatorFilter
 from .components.tabulator_settings import TabulatorPageSettings
 from .components.tabulator_table import TabulatorTable
+from .components.views_bar import KINDS, save_config
 from .flow import FlowGraph, build_edges, build_nodes
 from .panel import DatasetPanel
 from .settings import Settings, configure
 from .state import StateFile
+from .views import ViewStore
 from .widgets.function_runner import mount_artifacts
 
 
@@ -77,9 +79,16 @@ def start(settings: Settings) -> None:
     async def index(client: Client) -> None:
         await _index_page(client, catalog, positions, settings)
 
+    views = ViewStore(settings.state / "views")
+
     @ui.page("/dts/{key:path}")
-    async def dataset_page(key: str) -> None:
-        await _dataset_page(key, catalog)
+    async def dataset_page(key: str, view: str = "") -> None:
+        """One route, two pages. `view` is a query parameter rather than a path
+        segment because the key is matched greedily as `{key:path}`."""
+        if view:
+            await _view_page(key, catalog, views, view)
+        else:
+            await _dataset_page(key, catalog)
 
     ui.run(title=settings.title, port=settings.port, reload=False)
 
@@ -184,24 +193,77 @@ async def _index_page(client, catalog, positions, settings) -> None:
     asyncio.create_task(delayed_init())
 
 
+def _page_header(title: str, on_back: Callable[[], None]) -> ui.row:
+    """The thin bar both pages wear.
+
+    Title on the left, then a spacer — so whatever the caller adds inside the
+    returned row lands on the right, which is where a page's service buttons
+    go. Tabulator has two of them; a view has none yet.
+    """
+    with ui.row().classes("items-center gap-2 px-3 w-full").style(
+        f"border-bottom:1px solid #e0e0e0;height:{theme.HEADER_HEIGHT}px;"
+    ) as bar:
+        ui.button(icon="arrow_back", on_click=on_back).props("flat round size=sm")
+        ui.label(title).classes("text-sm font-bold")
+        ui.space()
+    return bar
+
+
+async def _view_page(key: str, catalog, store: ViewStore, view_id: str) -> None:
+    """A single view, filling a tab of its own.
+
+    Opened from the graph's views row through a plain anchor, so this is a
+    separate client from the one that lists the views. That is why the handler
+    writing layouts back is registered here: the component emits
+    `view_config_changed` into this page, and nowhere else.
+    """
+    ui.query("body").style("margin:0;overflow:hidden;")
+
+    view = next((v for v in store.list(key) if v.id == view_id), None)
+    module = KINDS.get(view.kind) if view else None
+
+    # To the dataset's table rather than back: the tab was opened fresh, so
+    # there is no history behind it to go back to.
+    _page_header(
+        f"{key} — {view.title}" if view else key,
+        lambda: ui.navigate.to(f"/dts/{key}"),
+    )
+
+    if view is None or module is None:
+        ui.label("No such view").classes("text-gray-400 text-sm m-auto")
+        return
+
+    install = getattr(module, "install", None)
+    if install is not None:
+        install()
+    ui.on("view_config_changed", lambda e: save_config(store, e))
+
+    try:
+        dts = catalog.dataset(key)
+        await catalog.run(key)
+    except Exception as exc:
+        ui.label(f"Error: {exc}").classes("text-red-500 p-4")
+        return
+
+    with ui.column().classes("w-full").style(
+        f"height:calc(100vh - {theme.HEADER_HEIGHT}px)"
+    ):
+        module.render(dts, view.id, store.config(key, view.id))
+
+
 async def _dataset_page(key: str, catalog) -> None:
     ui.query("body").style("margin:0;overflow:hidden;")
 
     holder: dict = {"settings": None, "filter": None}
-    with ui.row().classes("items-center gap-2 px-3 py-2 w-full").style(
-        "border-bottom:1px solid #e0e0e0;height:52px;"
-    ):
-        ui.button(icon="arrow_back", on_click=lambda: ui.navigate.back()).props("flat round size=sm")
-        ui.label(key).classes("text-sm font-bold")
-        ui.button(icon="filter_list", on_click=lambda: holder["filter"] and holder["filter"].open()).props("flat round size=sm")
-        ui.button(icon="settings", on_click=lambda: holder["settings"] and holder["settings"].open()).props("flat round size=sm")
-        ui.space()
-        # Close, not "back": people also arrive here by following a ref link on
-        # the card, and from there the browser's history leads anywhere but the
-        # graph.
-        ui.button(icon="close", on_click=lambda: ui.navigate.to("/")).props(
-            "flat round size=sm"
-        ).tooltip("Close")
+    with _page_header(key, lambda: ui.navigate.back()):
+        ui.button(
+            icon="filter_list",
+            on_click=lambda: holder["filter"] and holder["filter"].open(),
+        ).props("flat round size=sm").tooltip("Filter")
+        ui.button(
+            icon="settings",
+            on_click=lambda: holder["settings"] and holder["settings"].open(),
+        ).props("flat round size=sm").tooltip("Columns")
 
     try:
         dts = catalog.dataset(key)
