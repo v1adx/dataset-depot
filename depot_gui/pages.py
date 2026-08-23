@@ -222,7 +222,7 @@ def _run_button(key: str, catalog) -> None:
         ui.navigate.reload()
 
     button = ui.button(icon="refresh", on_click=run).props(
-        "flat round size=sm"
+        "flat round dense size=sm"
     ).tooltip("Run pipeline")
 
 
@@ -242,7 +242,9 @@ def _page_header(title: str, on_back: Callable[[], None] | None = None) -> ui.ro
         f"border-bottom:1px solid #e0e0e0;height:{theme.HEADER_HEIGHT}px;"
     ) as bar:
         if on_back is not None:
-            ui.button(icon="arrow_back", on_click=on_back).props("flat round size=sm")
+            ui.button(icon="arrow_back", on_click=on_back).props(
+                "flat round dense size=sm"
+            )
         ui.label(title).classes("text-sm font-bold")
         ui.space()
     return bar
@@ -257,6 +259,13 @@ async def _view_page(key: str, catalog, store: ViewStore, view_id: str) -> None:
     `view_config_changed` into this page, and nowhere else.
     """
     ui.query("body").style("margin:0;overflow:hidden;")
+    # nicegui.css pads .nicegui-content by 1rem and gaps its children by
+    # another, so the column below — which asks for the viewport minus the
+    # header — ends up 48px past the bottom of a page that has just been told
+    # not to scroll, and the last rows of every table went with it. A view
+    # fills its tab; the inset belongs to pages that have something to inset
+    # from. AgGrid used to subtract those 48px from its own height by hand.
+    ui.query(".nicegui-content").classes("p-0 gap-0")
 
     view = next((v for v in store.list(key) if v.id == view_id), None)
     module = KINDS.get(view.kind) if view else None
@@ -295,11 +304,11 @@ async def _dataset_page(key: str, catalog) -> None:
         ui.button(
             icon="filter_list",
             on_click=lambda: holder["filter"] and holder["filter"].open(),
-        ).props("flat round size=sm").tooltip("Filter")
+        ).props("flat round dense size=sm").tooltip("Filter")
         ui.button(
             icon="settings",
             on_click=lambda: holder["settings"] and holder["settings"].open(),
-        ).props("flat round size=sm").tooltip("Columns")
+        ).props("flat round dense size=sm").tooltip("Columns")
 
     try:
         dts = catalog.dataset(key)

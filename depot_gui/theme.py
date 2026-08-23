@@ -16,7 +16,12 @@ SPLITTER_DEFAULT = 60
 
 # The thin bar every page above the graph wears: title on the left, that
 # page's service buttons on the right.
-HEADER_HEIGHT = 40
+#
+# The buttons in it are dense because of this number: a round QBtn at size=sm
+# is 3em of a 10px font, which is 30px, and it would poke through a 28px bar.
+# Dense takes it to 2.4em — 24px, and the bar keeps a couple of pixels around
+# it. Raising the bar again is what lets that prop go.
+HEADER_HEIGHT = 28
 
 TABLE_DEFAULT_PAGE_SIZE = 16
 TABLE_PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 0]

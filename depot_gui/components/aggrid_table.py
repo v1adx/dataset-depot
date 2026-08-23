@@ -48,4 +48,4 @@ def render(dts: Dataset, view_id: str, config: dict) -> None:
         "pagination": True,
         "paginationPageSize": 50,
         "rowHeight": 22,
-    }).classes("w-full flex-1").style("height: calc(100% - 52px);")
+    }).classes("w-full flex-1").style("min-height:0")

@@ -182,21 +182,28 @@ def render(dts: Dataset, view_id: str, config: dict) -> None:
     if setup is None or option is None:
         setup, option = default_config(df)
 
-    with ui.splitter(value=70).classes("w-full flex-1").style("height:100%") as split:
+    # Heights are inline rather than `h-full`, because nicegui.css gives both
+    # .nicegui-echart and .nicegui-codemirror a height of 16rem and which of
+    # the two single-class rules wins is a question of stylesheet order. An
+    # inline style is not part of that argument. `min-height:0` goes with every
+    # flex child that has to shrink: without it a flex item refuses to go below
+    # its content, and the panel grows past the bottom of the page instead.
+    FILL = "height:100%;min-height:0;"
+    with ui.splitter(value=70).classes("w-full flex-1").style("min-height:0") as split:
         with split.before:
             # Empty on purpose: what the element holds is never what is drawn,
             # because setOption is called from draw() with JavaScript the props
             # could not carry.
-            chart = ui.echart({}).classes("w-full h-full")
+            chart = ui.echart({}).classes("w-full").style(FILL)
         with split.after:
-            with ui.splitter(horizontal=True, value=35).classes(
-                "w-full h-full"
+            with ui.splitter(horizontal=True, value=35).classes("w-full").style(
+                FILL
             ) as panes:
                 with panes.before:
                     setup_editor = ui.codemirror(setup, language="Python")
-                    setup_editor.classes("w-full h-full text-xs")
+                    setup_editor.classes("w-full text-xs").style(FILL)
                 with panes.after:
-                    with ui.column().classes("w-full h-full gap-0"):
+                    with ui.column().classes("w-full gap-0").style(FILL):
                         option_editor = ui.codemirror(option, language="JavaScript")
                         option_editor.classes("w-full flex-1 text-xs").style(
                             "min-height:0"
