@@ -26,12 +26,13 @@ from nicegui import ui
 from depot import Dataset
 
 from ..views import View, ViewStore
-from . import aggrid_table, perspective_table, pivot_table
+from . import aggrid_table, chart, perspective_table, pivot_table
 
 KINDS = {
     "aggrid": aggrid_table,
     "pivot": pivot_table,
     "perspective": perspective_table,
+    "chart": chart,
 }
 
 

@@ -14,6 +14,7 @@ from depot import Decision
 
 from . import theme
 from .catalog import Catalog
+from .errors import describe
 from .components.tabulator_filter import TabulatorFilter
 from .components.tabulator_settings import TabulatorPageSettings
 from .components.tabulator_table import TabulatorTable
@@ -193,17 +194,55 @@ async def _index_page(client, catalog, positions, settings) -> None:
     asyncio.create_task(delayed_init())
 
 
-def _page_header(title: str, on_back: Callable[[], None]) -> ui.row:
+def _run_button(key: str, catalog) -> None:
+    """Recompute the dataset without going back to the graph.
+
+    Forced, like the card's Pipeline button: the page has already run the
+    pipeline plainly on its way in, so an unforced run here would almost always
+    decide there is nothing to do.
+
+    The page reloads rather than rebuilding its contents in place. Both pages
+    are a pure function of the key, the view and the stored state, so a reload
+    is the honest way to show new data — and it sidesteps the stale references
+    a rebuild would leave behind: TabulatorPageSettings and TabulatorFilter each
+    hold the table and the dataset they were built with. Perspective's layout
+    survives it, being in the token by then.
+    """
+    async def run() -> None:
+        button.props("loading")
+        try:
+            await catalog.run(key, force=True)
+        except Exception as exc:
+            ui.notify(
+                f"Pipeline failed — {key}: {describe(exc, f'pipeline failed: {key}')}",
+                type="negative",
+            )
+            button.props(remove="loading")
+            return
+        ui.navigate.reload()
+
+    button = ui.button(icon="refresh", on_click=run).props(
+        "flat round size=sm"
+    ).tooltip("Run pipeline")
+
+
+def _page_header(title: str, on_back: Callable[[], None] | None = None) -> ui.row:
     """The thin bar both pages wear.
 
     Title on the left, then a spacer — so whatever the caller adds inside the
-    returned row lands on the right, which is where a page's service buttons
-    go. Tabulator has two of them; a view has none yet.
+    returned row lands on the right, which is where a page's service buttons go.
+
+    Back only where there is somewhere to go back to. Tabulator replaces the
+    graph in the tab it was opened from, so back means the graph. A view opens
+    in a tab of its own, where back has no history behind it and would have to
+    invent a destination — the dataset's table, which is not where the reader
+    came from. The tab's own close button is the honest way out.
     """
     with ui.row().classes("items-center gap-2 px-3 w-full").style(
         f"border-bottom:1px solid #e0e0e0;height:{theme.HEADER_HEIGHT}px;"
     ) as bar:
-        ui.button(icon="arrow_back", on_click=on_back).props("flat round size=sm")
+        if on_back is not None:
+            ui.button(icon="arrow_back", on_click=on_back).props("flat round size=sm")
         ui.label(title).classes("text-sm font-bold")
         ui.space()
     return bar
@@ -222,12 +261,8 @@ async def _view_page(key: str, catalog, store: ViewStore, view_id: str) -> None:
     view = next((v for v in store.list(key) if v.id == view_id), None)
     module = KINDS.get(view.kind) if view else None
 
-    # To the dataset's table rather than back: the tab was opened fresh, so
-    # there is no history behind it to go back to.
-    _page_header(
-        f"{key} — {view.title}" if view else key,
-        lambda: ui.navigate.to(f"/dts/{key}"),
-    )
+    with _page_header(f"{key} — {view.title}" if view else key):
+        _run_button(key, catalog)
 
     if view is None or module is None:
         ui.label("No such view").classes("text-gray-400 text-sm m-auto")
@@ -256,6 +291,7 @@ async def _dataset_page(key: str, catalog) -> None:
 
     holder: dict = {"settings": None, "filter": None}
     with _page_header(key, lambda: ui.navigate.back()):
+        _run_button(key, catalog)
         ui.button(
             icon="filter_list",
             on_click=lambda: holder["filter"] and holder["filter"].open(),
