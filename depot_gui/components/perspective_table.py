@@ -71,12 +71,14 @@ HEAD = Template("""
   perspective-viewer { width: 100%; height: 100%; min-height: 0; flex: 1 1 auto; }
 </style>
 <script>
-// navigator.clipboard is [SecureContext] only, and this app is served over
-// plain http on a LAN address — so the viewer's Copy button reaches for an API
-// that is not there and silently does nothing. Perspective builds a
-// ClipboardItem and calls clipboard.write([item]); both halves are stubbed
-// here. Classic script on purpose: the module below is deferred, and the
-// bundle reads window.ClipboardItem once, as it evaluates.
+// navigator.clipboard is [SecureContext] only, so on any address that is not
+// localhost this app serves an insecure origin and the API is simply absent —
+// the viewer's Copy button reaches for something that is not there and fails
+// without a word. Perspective builds a ClipboardItem and calls
+// clipboard.write([item]); both halves are stubbed here.
+//
+// Classic script on purpose: the module below is deferred, and the bundle
+// reads window.ClipboardItem once, as it evaluates.
 //
 // A detached div rather than a textarea because a textarea has to be focused
 // to be selected, and focusing anything outside the dialog hands the Quasar
@@ -87,32 +89,56 @@ HEAD = Template("""
 // misses the window. Serve over https if that ever starts to bite.
 if (!navigator.clipboard) {
     window.ClipboardItem = function (parts) { this.parts = parts; };
-    Object.defineProperty(navigator, "clipboard", {value: {
-        write: async function (items) {
-            var parts = items[0].parts;
-            var payload = parts["text/plain"] || parts[Object.keys(parts)[0]];
-            var text = payload instanceof Blob ? await payload.text() : String(payload);
-            var host = document.createElement("div");
-            host.textContent = text;
-            // Off-screen, not display:none — a box with no layout has nothing
-            // to select, and the copy would come back empty.
-            host.style.cssText = "position:fixed;left:-9999px;top:0;white-space:pre;";
-            document.body.appendChild(host);
-            var selection = getSelection();
-            var previous = selection.rangeCount ? selection.getRangeAt(0) : null;
-            var range = document.createRange();
-            range.selectNodeContents(host);
+
+    var depotCopy = function (text) {
+        var host = document.createElement("div");
+        host.textContent = text;
+        // Off-screen, not display:none — a box with no layout has nothing to
+        // select, and the copy would come back empty.
+        host.style.cssText = "position:fixed;left:-9999px;top:0;white-space:pre;";
+        document.body.appendChild(host);
+        var selection = getSelection();
+        var previous = selection.rangeCount ? selection.getRangeAt(0) : null;
+        var range = document.createRange();
+        range.selectNodeContents(host);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        try {
+            if (!document.execCommand("copy")) throw new Error("execCommand copy refused");
+        } finally {
             selection.removeAllRanges();
-            selection.addRange(range);
-            try {
-                if (!document.execCommand("copy")) throw new Error("execCommand copy refused");
-            } finally {
-                selection.removeAllRanges();
-                if (previous) selection.addRange(previous);
-                host.remove();
-            }
+            if (previous) selection.addRange(previous);
+            host.remove();
+        }
+    };
+
+    var depotClipboard = {
+        write: async function (items) {
+            // write() takes an array, but a lone item costs nothing to accept.
+            // The MIME key lives in the .wasm, not in the js bundle, so it is
+            // read rather than assumed: "text/plain" when it is there, and
+            // whatever single type the item carries when it is not.
+            var item = Array.isArray(items) ? items[0] : items;
+            var parts = item.parts;
+            var payload = await (parts["text/plain"] || parts[Object.keys(parts)[0]]);
+            depotCopy(payload instanceof Blob ? await payload.text() : String(payload));
         },
-    }});
+        // Perspective only calls write(). writeText is here because nicegui's
+        // own ui.clipboard.write() calls it and dies on the same missing API.
+        writeText: async function (text) { depotCopy(String(text)); },
+    };
+
+    // navigator has no own "clipboard" to shadow in an insecure context, so
+    // defineProperty is the clean way in — but a browser exposing it as a
+    // non-configurable accessor would throw, and a shim that throws is a
+    // silent no-op. Plain assignment is the fallback.
+    try {
+        Object.defineProperty(navigator, "clipboard",
+                              {value: depotClipboard, configurable: true});
+    } catch (e) {
+        navigator.clipboard = depotClipboard;
+    }
+    console.info("depot: clipboard shim installed:", !!navigator.clipboard);
 }
 </script>
 <script type="module">
