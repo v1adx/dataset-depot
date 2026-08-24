@@ -500,3 +500,16 @@ def test_the_index_offers_its_actions_as_utilities(tiny_depot):
         utility(d)
 
     assert d.load().set_index("name").loc["derived", "rows"] == 3
+
+
+def test_the_index_does_not_offer_what_it_cannot_run(tiny_depot):
+    """Without load_all there are no refs to run, so no button offers to.
+
+    A utility is rendered as an action and called; one that can only raise is
+    a dead button. The interface builds its index this way — load_all would
+    import every module at construction — and used to show two of them.
+    """
+    d = DatasetIndex(name="index", type="t")
+
+    names = [getattr(f, "__name__", type(f).__name__) for f in d.utilities]
+    assert names == ["reload"]

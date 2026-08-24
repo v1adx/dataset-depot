@@ -167,10 +167,13 @@ class DatasetIndex(Dataset):
         self.root = Path(self.root) if self.root else config.source()
         self.probe = self.index_mtime
         self.extractors.insert(0, self.extract)
-        self.utilities += [self.reload, self.run_all, self.run_all_forced]
+        self.utilities.append(self.reload)
 
         if self.load_all:
             # Here rather than in the field: a dataset cannot be excluded from
             # its own refs until it knows its own key, and including itself is
             # a cycle.
             self.refs = self._every_other_dataset()
+            # Only with those refs do these two have anything to run. Offered
+            # unconditionally they are buttons that can only raise.
+            self.utilities += [self.run_all, self.run_all_forced]
