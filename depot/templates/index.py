@@ -9,6 +9,7 @@ import pandas as pd
 
 from .. import cache, config, registry
 from ..dataset import Dataset
+from ..runner import run
 from .files import _matching, _mtime
 
 
@@ -42,13 +43,13 @@ class DatasetIndex(Dataset):
     its own: the probe watches every dataset module, so editing one is what
     rebuilds the table — no invalidation rule written by hand.
 
-    With ``load_all``, every dataset in the depot becomes a ref. Running this
+    With ``load_all``, every dataset in the depot becomes a ref. Loading this
     then brings the whole depot up to date, in topological order, each node
     once — the framework's own machinery rather than a driver written beside
     it — and the table describes what was just computed instead of what is on
-    disk. ``run_all`` is that run asked for directly, ``reload`` picks up
-    datasets written since this one was built, and both are offered as
-    utilities as well.
+    disk. Without it, listing the depot only describes what is on disk, which
+    is what an interface wants: ``run_all`` asks for that same run explicitly,
+    and works either way. Both, with ``reload``, are offered as utilities.
     """
 
     root: Path | None = None
@@ -139,20 +140,20 @@ class DatasetIndex(Dataset):
     def run_all(self, _: Dataset | None = None, force: bool = False) -> None:
         """Bring every dataset in the depot up to date, then describe what came out.
 
-        Through the refs, not a loop over the datasets: the runner then walks
-        the graph in topological order and touches each node once. A loop would
-        recompute a shared source once per dependant, and under ``force`` send
-        it back to its API that many times.
+        One walk of the graph, not a loop of runs: the runner takes the whole
+        depot at once and touches each node once. A loop would recompute a
+        shared source once per dependant, and under ``force`` send it back to
+        its API that many times.
+
+        The datasets come from the tree rather than from ``refs``, so this
+        works on an index that holds none — which is how an interface builds
+        it, so that listing the depot never runs it. Its own table is rebuilt
+        afterwards, unforced: the work has just been done, and ``force`` here
+        would only do it again.
         """
-        if not self.load_all:
-            raise ValueError(
-                f"{self.key}: run_all needs load_all=True. Without it this index "
-                "holds no datasets as refs, and taking them on for one call would "
-                "change the version it computes for itself, which is derived from "
-                "exactly those refs."
-            )
+        run(*self._every_other_dataset(), force=force)
         self.reload()
-        self.pipeline(force=force)
+        self.pipeline()
 
     def run_all_forced(self, _: Dataset | None = None) -> None:
         """``run_all``, recomputing regardless of freshness.
@@ -167,13 +168,10 @@ class DatasetIndex(Dataset):
         self.root = Path(self.root) if self.root else config.source()
         self.probe = self.index_mtime
         self.extractors.insert(0, self.extract)
-        self.utilities.append(self.reload)
+        self.utilities += [self.reload, self.run_all, self.run_all_forced]
 
         if self.load_all:
             # Here rather than in the field: a dataset cannot be excluded from
             # its own refs until it knows its own key, and including itself is
             # a cycle.
             self.refs = self._every_other_dataset()
-            # Only with those refs do these two have anything to run. Offered
-            # unconditionally they are buttons that can only raise.
-            self.utilities += [self.run_all, self.run_all_forced]

@@ -202,6 +202,18 @@ def test_roundtrip_nested_columns(tmp_path):
     assert loaded["client"].tolist()[1] is None
 
 
+def test_nested_column_found_when_first_value_is_not_nested(tmp_path):
+    # A sparse list column — Grist gives "" for an empty choice list — is
+    # nested even though its first rows are plain strings. Missing it used to
+    # reach the fingerprint hash with a real list in it and raise.
+    config.set_cache_dir(tmp_path)
+    d = _dts()
+    d.dataframe = pd.DataFrame({"tags": ["", "", ["a", "b"]]})
+    assert cache.save(d)
+    assert cache.read_meta(d).nested == ["tags"]
+    assert cache.load(d)["tags"].tolist() == ["", "", ["a", "b"]]
+
+
 def test_nested_list_is_dropped_when_no_longer_nested(tmp_path):
     config.set_cache_dir(tmp_path)
     d = _dts()

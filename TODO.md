@@ -62,3 +62,45 @@ ln -s "$(uv run python -c 'import depot,pathlib;print(pathlib.Path(depot.__file_
 
 Worth a line in the README under "Writing datasets", next to the sentence that
 already points at the file.
+
+## 4. `_caller_file` mistakes a user-side template for the declaring module
+
+`_caller_file` skips frames inside the depot package, so a template living in
+`depot/templates/` correctly attributes the dataset to the module that called
+it. A template written *by a project* — a `Dataset` subclass whose
+`__post_init__` inserts its own extractor — is not in the package, so the walk
+stops at the subclass's own frame and every instance takes its identity from
+the file that defines the class rather than the file that declares the dataset:
+
+```
+datasets:__init__        clients.contracts.dts_raw, entities.dts_businesses, entities.dts_contractors
+datasets/helper:__init__ clients.invoices.dts_raw, suppliers.contracts.dts_raw, suppliers.invoices.dts_raw
+```
+
+Six datasets, two keys. They share a parquet, `reachable()` collapses them into
+one node when two land in the same run, and `registry.discover` drops all of
+them on `obj.source != declared_in`, so none appear in the catalog. The failure
+is silent in every direction — the only loud case is a declaration and its
+helper in one module, which reads back as a self-ref and raises `CycleError`.
+
+The fix is to skip the files that define the dataset's own class chain, not
+only the package:
+
+```python
+def _declaring_files(cls) -> frozenset[Path]:
+    """Files defining the class itself: a user-side template is not the
+    module that declared the dataset."""
+    out = set()
+    for klass in cls.__mro__:
+        try:
+            out.add(Path(inspect.getfile(klass)).resolve())
+        except (TypeError, OSError):
+            pass
+    return frozenset(out)
+
+# _caller_file(skip): ... if _PKG_DIR not in resolved.parents and resolved not in skip
+# __post_init__:      self.source = _caller_file(_declaring_files(type(self)))
+```
+
+Until then a project template has to set `name`/`type` itself before calling
+`super().__post_init__()`, which is what `depot/exdst` now does.

@@ -120,19 +120,21 @@ def plan(target: Dataset, force: bool = False) -> list[Decision]:
 
 
 def run(
-    target: Dataset,
+    *targets: Dataset,
     force: bool = False,
     on_event: Event | None = None,
 ) -> list[Decision]:
-    """Bring the target and everything it depends on up to date.
+    """Bring the targets and everything they depend on up to date.
 
-    Each node executes exactly once, dependencies first. ``on_event`` is
+    Each node executes exactly once, dependencies first — targets sharing a
+    source run it once between them, not once each, which is what makes a run
+    of many datasets different from many runs of one. ``on_event`` is
     called with ``("started", decision)`` and ``("finished", decision)``
     around every node, in execution order, so a UI can follow along; the
     returned decisions are the same objects, complete.
     """
     decisions = []
-    for dts in topological(target):
+    for dts in topological(*targets):
         decision = _run_one(dts, force=force, on_event=on_event)
         decisions.append(decision)
     return decisions

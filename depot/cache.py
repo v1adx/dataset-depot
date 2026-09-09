@@ -111,12 +111,18 @@ def _write_meta(dts: Dataset, meta: Meta) -> None:
 
 
 def _nested_columns(df: pd.DataFrame) -> list[str]:
+    """The columns holding a list or dict anywhere in them.
+
+    Every value is looked at, not just the first. A column that is empty
+    strings for four thousand rows and a list on the last one is still a
+    nested column: parquet cannot hold it, and neither can the hash that
+    fingerprints the frame — it raises on the one unhashable cell.
+    """
     found = []
     for col in df.columns:
         if df[col].dtype != object:
             continue
-        sample = df[col].dropna()
-        if len(sample) > 0 and isinstance(sample.iloc[0], (list, dict)):
+        if df[col].map(lambda v: isinstance(v, (list, dict))).any():
             found.append(str(col))
     return found
 

@@ -80,3 +80,12 @@ def test_cycle_raises():
     a.refs = [b]
     with pytest.raises(CycleError):
         topological(a)
+
+
+def test_several_targets_share_one_order():
+    """What run_all relies on: a source two targets need is run once, not twice."""
+    shared = _d("shared")
+    left = _d("left", [shared])
+    right = _d("right", [shared])
+
+    assert [x.name for x in topological(left, right)] == ["shared", "left", "right"]

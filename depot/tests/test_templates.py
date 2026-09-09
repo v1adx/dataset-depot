@@ -473,17 +473,20 @@ def test_run_all_forced_recomputes_every_node(tiny_depot):
     assert "raw:source" in calls
 
 
-def test_run_all_refuses_an_index_that_holds_no_datasets(tiny_depot):
-    """Without load_all the index is declared as "describe, run nothing".
+def test_run_all_runs_the_depot_from_an_index_that_holds_no_refs(tiny_depot):
+    """The interface builds its index without load_all, and still has the button.
 
-    Quietly taking every dataset as a ref for the duration of one call would
-    change what the dataset is — its version is computed from its refs — so the
-    answer is to say so rather than to improvise.
+    Taking every dataset on as a ref would change what this dataset is — its
+    version is computed from its refs, so listing the depot would start
+    running it. The run is driven from the tree instead.
     """
     d = DatasetIndex(name="index", type="t")
+    assert d.refs == []
 
-    with pytest.raises(ValueError, match="load_all"):
-        d.run_all()
+    d.run_all()
+
+    assert d.refs == []
+    assert d.load().set_index("name").loc["derived", "rows"] == 3
 
 
 def test_the_index_offers_its_actions_as_utilities(tiny_depot):
@@ -500,16 +503,3 @@ def test_the_index_offers_its_actions_as_utilities(tiny_depot):
         utility(d)
 
     assert d.load().set_index("name").loc["derived", "rows"] == 3
-
-
-def test_the_index_does_not_offer_what_it_cannot_run(tiny_depot):
-    """Without load_all there are no refs to run, so no button offers to.
-
-    A utility is rendered as an action and called; one that can only raise is
-    a dead button. The interface builds its index this way — load_all would
-    import every module at construction — and used to show two of them.
-    """
-    d = DatasetIndex(name="index", type="t")
-
-    names = [getattr(f, "__name__", type(f).__name__) for f in d.utilities]
-    assert names == ["reload"]
