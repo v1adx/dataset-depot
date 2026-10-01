@@ -50,3 +50,22 @@ def test_state_directory_is_created_by_configure(tmp_path):
     configure(settings)
     assert settings.state.is_dir()
     assert settings.artifacts.is_dir()
+
+
+def test_the_password_comes_from_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEPOT_GUI_PASSWORD", "s3")
+    assert make(tmp_path).password == "s3"
+
+
+def test_an_explicit_password_wins(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEPOT_GUI_PASSWORD", "s3")
+    assert make(tmp_path, password="mine").password == "mine"
+
+
+def test_no_password_means_no_prompt(tmp_path, monkeypatch):
+    monkeypatch.delenv("DEPOT_GUI_PASSWORD", raising=False)
+    assert make(tmp_path).password is None
+
+
+def test_the_password_stays_out_of_the_repr(tmp_path):
+    assert "s3" not in repr(make(tmp_path, password="s3"))

@@ -158,6 +158,52 @@ def test_a_dataset_with_no_identity_at_all_is_refused(monkeypatch):
     # "__.parquet", and one of those is still lying in the real depot.
     import depot.dataset as module
 
-    monkeypatch.setattr(module, "_caller_file", lambda: None)
+    monkeypatch.setattr(module, "_caller_file", lambda skip=frozenset(): None)
     with pytest.raises(ValueError, match="needs an identity"):
         Dataset()
+
+
+def test_the_age_is_counted_from_now():
+    import time
+
+    d = Dataset(name="a", type="t")
+    d.changed = time.time() - 7200
+    assert d.get_age() == "2h"
+
+
+def test_a_dataset_that_never_changed_has_no_age():
+    assert Dataset(name="a", type="t").get_age() == "never"
+
+
+def test_a_project_template_does_not_take_the_identity_of_its_instances(tmp_path, monkeypatch):
+    """A Dataset subclass that fills itself in, living in a helper module: every
+    instance used to take the helper's identity, share its parquet, and vanish
+    from discovery."""
+    config.set_source(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "tpl_loaders.py").write_text(
+        "from dataclasses import dataclass\n"
+        "from depot.dataset import Dataset\n"
+        "@dataclass(eq=False)\n"
+        "class Loader(Dataset):\n"
+        "    def __post_init__(self):\n"
+        "        super().__post_init__()\n",
+        encoding="utf-8")
+
+    module = _load_user_module(tmp_path / "clients" / "contracts.py",
+                               "from tpl_loaders import Loader\ndts = Loader()\n")
+    assert module.dts.key == "clients:contracts"
+
+
+def test_a_template_declared_beside_its_dataset_still_names_that_module(tmp_path):
+    config.set_source(tmp_path)
+    module = _load_user_module(
+        tmp_path / "clients" / "invoices.py",
+        "from dataclasses import dataclass\n"
+        "from depot.dataset import Dataset\n"
+        "@dataclass(eq=False)\n"
+        "class Loader(Dataset):\n"
+        "    def __post_init__(self):\n"
+        "        super().__post_init__()\n"
+        "dts = Loader()\n")
+    assert module.dts.key == "clients:invoices"

@@ -115,3 +115,31 @@ def test_a_run_that_fails_before_its_first_started_does_not_repaint_a_previous_r
 
     assert flow.calls == calls_after_run_1
     assert ("mark", "source:records", "error") not in flow.calls
+
+
+# --- the password in front of everything ---------------------------------------
+
+def _guarded():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from depot_gui.pages import BasicAuth
+
+    app = FastAPI()
+    app.get("/")(lambda: "ok")
+    app.add_middleware(BasicAuth, password="secret")
+    return TestClient(app)
+
+
+def test_without_the_password_nothing_is_served():
+    response = _guarded().get("/")
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"].startswith("Basic")
+
+
+def test_a_wrong_password_is_refused():
+    assert _guarded().get("/", auth=("me", "nope")).status_code == 401
+
+
+def test_the_password_opens_it_whatever_the_name():
+    assert _guarded().get("/", auth=("anyone", "secret")).status_code == 200

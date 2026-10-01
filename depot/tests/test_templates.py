@@ -503,3 +503,12 @@ def test_the_index_offers_its_actions_as_utilities(tiny_depot):
         utility(d)
 
     assert d.load().set_index("name").loc["derived", "rows"] == 3
+
+
+def test_the_index_of_an_empty_depot_is_an_empty_table_not_a_missing_one(tmp_path):
+    """Nothing to watch made the probe answer 0, so the table was never built
+    and the interface fell over on a column that was not there."""
+    root = tmp_path / "empty"
+    root.mkdir()
+    d = DatasetIndex(root=root, name="index", type="t")
+    assert list(d.load().columns) == DatasetIndex.COLUMNS

@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from .dataset import Dataset, _format_age
+from .dataset import Dataset
 
 
 @dataclass
@@ -19,7 +19,6 @@ class Decision:
     dataset: Dataset
     extract: bool = False
     transform: bool = False
-    validate: bool = False
     probe_moved: bool = False
     refs_moved: bool = False
     source_moved: bool = False
@@ -27,6 +26,7 @@ class Decision:
     reasons: list[str] = field(default_factory=list)
     elapsed: float = 0.0
     extras_ran: list[str] = field(default_factory=list)
+    error: str = ""  # what this node raised, in a run told to keep going
 
     @property
     def works(self) -> bool:
@@ -69,7 +69,7 @@ def decide(
     r = Decision(dts)
 
     if force:
-        r.extract = r.transform = r.validate = True
+        r.extract = r.transform = True
         r.certain = True
         r.reasons.append("force")
 
@@ -77,25 +77,24 @@ def decide(
         # The module that produces this data is an input to it. Editing it and
         # leaving the old parquet in place is how a dataset comes to serve
         # something its own code can no longer produce.
-        r.extract = r.transform = r.validate = True
+        r.extract = r.transform = True
         r.source_moved = r.certain = True
         r.reasons.append("module changed")
 
     if dts.probe is not None:
         if probe_value is not None and probe_value > dts.changed:
-            r.extract = r.validate = True
+            r.extract = True
             r.probe_moved = r.certain = True
             r.reasons.append("probe moved")
     elif dts.threshold is not None:
         if dts.timestamp == 0:
-            r.extract = r.validate = True
+            r.extract = True
             r.certain = True
             r.reasons.append("first run")
         elif (now - dts.timestamp) >= dts.threshold:
-            r.extract = r.validate = True
+            r.extract = True
             r.certain = True
-            #age = now - dts.timestamp
-            r.reasons.append(f"source outdated")
+            r.reasons.append("source outdated")
 
     versions = ref_changed or {}
     moved = [
@@ -103,7 +102,7 @@ def decide(
         if versions.get(ref.key, ref.changed) > dts.changed
     ]
     if moved:
-        r.extract = r.transform = r.validate = True
+        r.extract = r.transform = True
         r.refs_moved = True
         r.reasons.extend(f"ref {ref.key}" for ref in moved)
 

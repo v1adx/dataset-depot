@@ -1,6 +1,7 @@
 """Dataset — a node of the graph: its declaration, its state and its data."""
 from __future__ import annotations
 
+import functools
 import re
 import sys
 import time
@@ -36,7 +37,7 @@ def _check_identity(value: str, pattern: re.Pattern, what: str, dataset: str) ->
 def _format_age(seconds: float) -> str:
     """A span of time in one unit, coarsely: ``45s``, ``12m``, ``3h``, ``2w``.
 
-    Shared by the timer's reason and by info, so "12m of 60m" and "12m ago"
+    Shared by info, get_age and the interface's node labels, so "12m ago"
     cannot start meaning different things.
     """
     for limit, unit, size in ((60, "s", 1), (3600, "m", 60), (86400, "h", 3600),
@@ -46,19 +47,40 @@ def _format_age(seconds: float) -> str:
     return f"{int(seconds // 604800)}w"
 
 
-def _caller_file() -> Path | None:
+@functools.cache
+def _own_code(cls: type) -> frozenset:
+    """The code of every method the dataset's class chain defines.
+
+    A frame running one of them is a template filling itself in — a project's
+    own ``Dataset`` subclass as much as depot's — and never the module that
+    declared the dataset. Skipping by file instead would lose a module that
+    defines its template and declares the dataset in the same breath.
+    """
+    codes = set()
+    for klass in cls.__mro__:
+        for attr in vars(klass).values():
+            code = getattr(getattr(attr, "__func__", attr), "__code__", None)
+            if code is not None:
+                codes.add(code)
+    return frozenset(codes)
+
+
+def _caller_file(skip: frozenset = frozenset()) -> Path | None:
     """The file of the first stack frame outside the depot package.
 
-    Both guards are needed. Synthetic frames (``co_filename`` starting with
-    ``<``) are skipped because the dataclass-generated ``__init__`` is one of
-    them and would otherwise be mistaken for the caller. Package frames are
-    skipped because a template factory living inside depot builds datasets on
-    behalf of a user module, and it is that user module we want.
+    Three guards. Synthetic frames (``co_filename`` starting with ``<``) are
+    skipped because the dataclass-generated ``__init__`` is one of them and
+    would otherwise be mistaken for the caller. Package frames are skipped
+    because a template factory living inside depot builds datasets on behalf
+    of a user module, and it is that user module we want. Frames running code
+    in ``skip`` — the dataset's own methods — are skipped for the same reason
+    when the template lives in the project: otherwise every instance took the
+    identity of the file defining the class, and shared its parquet.
     """
     frame = sys._getframe(1)
     while frame is not None:
         filename = frame.f_code.co_filename
-        if not filename.startswith("<"):
+        if not filename.startswith("<") and frame.f_code not in skip:
             path = Path(filename)
             try:
                 resolved = path.resolve()
@@ -126,7 +148,9 @@ class Dataset:
     becomes the new ``changed``. ``threshold`` is the fallback for sources
     with no cheap probe: ``None`` means no timer at all, ``N`` means do not
     consult the source more often than once every N seconds, ``0`` means
-    consult it every run. A probe and a threshold together make no sense —
+    consult it every run — on the runner's schedule: a ``cache=False``
+    dataset read between runs goes to the source on its own, see Storage.
+    A probe and a threshold together make no sense —
     the probe already answers exactly.
 
     Which of the two: write a probe when learning the version is cheaper than
@@ -162,7 +186,9 @@ class Dataset:
     runner empties it before every extract, so an empty frame always means
     this run and not the previous one. An extractor that changed something
     without having rows to show for it (deletions, say) sets ``changed``
-    itself.
+    itself. Read outside a run, it has nothing stored to open and produces
+    its data on the spot — a trip to the source that ``threshold`` does not
+    count, so a source that must not be asked more often wants ``cache=True``.
 
     For ``cache=True`` the same answer comes from the data rather than from
     the extractor: a product identical to what is already stored has not
@@ -201,15 +227,22 @@ class Dataset:
     changed: float = 0.0
 
     source: Path | None = field(default=None, repr=False, init=False)
+    _source_digest: str = field(default="", repr=False, init=False)
 
     _dataframe: pd.DataFrame | None = field(default=None, repr=False, init=False)
     _meta_loaded: bool = field(default=False, repr=False, init=False)
+    # (timestamp, changed) as this object last read or wrote them: what tells
+    # another process's write apart from this object's own state.
+    _seen: tuple[float, float] | None = field(default=None, repr=False, init=False)
 
     def __post_init__(self) -> None:
         # Always, not only when the identity needs deriving: the module that
         # declares a dataset is an input to it like any other, and the cache
         # has to be able to tell when that input changed.
-        self.source = _caller_file()
+        self.source = _caller_file(_own_code(type(self)))
+        # Fingerprinted now, while the file still holds the code being run.
+        from . import cache
+        self._source_digest = cache.file_digest(self.source)
 
         if self.name is None or self.type is None:
             if self.source is None:
@@ -231,15 +264,34 @@ class Dataset:
 
     @property
     def dataframe(self) -> pd.DataFrame:
-        """The data, loaded from the cache on first read.
+        """The data, materialised on first read.
 
-        Reading this is the only thing that opens a parquet file, and it never
-        runs the pipeline. That is what lets the runner decide a whole graph
-        from metadata alone and leave untouched subtrees on disk.
+        For a cached dataset that means opening its parquet and nothing else:
+        the read never runs the pipeline, which is what lets the runner decide
+        a whole graph from metadata alone and leave untouched subtrees on disk.
+
+        A ``cache=False`` dataset has no parquet to open. The same read used to
+        answer with an empty frame — indistinguishable from a source that had
+        nothing — while the timer, restored from the metafile, told the runner
+        there was nothing to fetch: the data existed nowhere, and only
+        ``force=True`` ever produced any. Its data lives in this process or not
+        at all, so when it is not here it is produced, this node alone.
+
+        Only the phases that make the data run: no validators, no extras, and
+        the version stays where it is. Nothing was stored and nothing went
+        outward — the source was consulted for its rows, not for its version,
+        and the timer that schedules those visits is left to the runner.
         """
         if self._dataframe is None:
-            from . import cache
-            self._dataframe = cache.load(self)
+            if self.cache:
+                from . import cache
+                self._dataframe = cache.load(self)
+            else:
+                # Assigned before the phases run, not after: an extractor that
+                # reads its own dataframe would otherwise re-enter here for ever.
+                self._dataframe = pd.DataFrame()
+                for phase in (*self.extractors, *self.transforms):
+                    phase(self)
         return self._dataframe
 
     @dataframe.setter
@@ -252,12 +304,24 @@ class Dataset:
         self._dataframe = value
 
     def load_meta(self) -> None:
-        """Restore timestamp/changed from the metafile. Once per process."""
-        if self._meta_loaded:
-            return
+        """Restore timestamp/changed from the metafile.
+
+        On first use, and again whenever the file no longer says what this
+        object last read or wrote — another process has run the dataset since,
+        a CLI next to a long-lived interface. Its version is then the current
+        one, and the data this object holds is not: it is dropped, so the next
+        read opens what that process stored. Otherwise the object's own state
+        stands, whatever it has been set to since.
+        """
         from . import cache
         meta = cache.read_meta(self)
-        self.timestamp, self.changed = meta.timestamp, meta.changed
+        disk = (meta.timestamp, meta.changed)
+        if self._meta_loaded and disk == self._seen:
+            return
+        if self._meta_loaded:
+            self._dataframe = None
+        self.timestamp, self.changed = disk
+        self._seen = disk
         self._meta_loaded = True
 
     def reset(self) -> None:
@@ -272,6 +336,7 @@ class Dataset:
         self.timestamp = 0.0
         self.changed = 0.0
         self._meta_loaded = True
+        self._seen = (0.0, 0.0)
         cache.drop(self)
 
     def pipeline(self, force: bool = False) -> None:
@@ -333,7 +398,7 @@ class Dataset:
 
 
     def get_age(self) -> str:
-        return _format_age(self.changed)
+        return _format_age(time.time() - self.changed) if self.changed else "never"
 
     def get_mtime(self) -> datetime:
         return datetime.fromtimestamp(self.changed)

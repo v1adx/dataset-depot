@@ -6,9 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
-    "pandas>=2.2",
+    "pandas>=3.0",
     "pyarrow>=15.0",
     "orjson>=3.9",
+    "python-dotenv>=1.0",
 ]
 
 [project.urls]
@@ -16,7 +17,7 @@ Homepage = "https://github.com/v1adx/dataset-depot"
 Repository = "https://github.com/v1adx/dataset-depot"
 
 [project.optional-dependencies]
-gui = ["nicegui>=1.4"]
+gui = ["nicegui>=3.0"]
 
 [project.scripts]
 depot = "depot.cli:main"

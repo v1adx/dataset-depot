@@ -3,6 +3,7 @@ import pytest
 
 from depot import cache, config
 from depot.dataset import Dataset
+from depot.runner import run
 
 
 def test_dataframe_loads_from_cache_on_first_read(tmp_path):
@@ -103,3 +104,50 @@ def test_assigning_none_is_rejected(tmp_path):
     d = Dataset(name="records", type="source")
     with pytest.raises(TypeError):
         d.dataframe = None
+
+
+# --- a loader has no parquet to fall back on (cache=False) ------------------
+
+def _brings(rows):
+    def extract(dts):
+        dts.dataframe = pd.DataFrame(rows)
+    return extract
+
+
+def test_a_loader_materialises_itself_instead_of_answering_empty(tmp_path):
+    # Regression: a loader stores no dataframe, so the lazy read found no
+    # parquet and answered empty — indistinguishable from a source that had
+    # nothing. Meanwhile the timer, restored from the metafile, told the
+    # runner not to fetch. Only force=True ever produced data.
+    config.set_cache_dir(tmp_path)
+    run(Dataset(name="loader", type="raw", threshold=3600, cache=False,
+                extractors=[_brings({"x": [1, 2]})]))
+
+    fresh = Dataset(name="loader", type="raw", threshold=3600, cache=False,
+                    extractors=[_brings({"x": [1, 2]})])
+    assert fresh.load()["x"].tolist() == [1, 2]
+
+
+def test_a_loader_read_as_a_ref_is_not_empty(tmp_path):
+    config.set_cache_dir(tmp_path)
+    run(Dataset(name="loader", type="raw", threshold=3600, cache=False,
+                extractors=[_brings({"x": [1, 2]})]))
+
+    src = Dataset(name="loader", type="raw", threshold=3600, cache=False,
+                  extractors=[_brings({"x": [1, 2]})])
+    seen = []
+    derived = Dataset(name="derived", type="t", refs=[src],
+                      transforms=[lambda d: seen.append(len(src.dataframe))])
+    run(derived)
+    assert seen == [2]
+
+
+def test_a_derived_loader_recomputes_itself_when_read(tmp_path):
+    # The same hole one layer up: nothing is stored, so the data is the
+    # transform's to produce.
+    config.set_cache_dir(tmp_path)
+    src = Dataset(name="src", type="raw", threshold=0, cache=False,
+                  extractors=[_brings({"x": [1, 2]})])
+    derived = Dataset(name="derived", type="t", refs=[src], cache=False,
+                      transforms=[lambda d: setattr(d, "dataframe", src.dataframe)])
+    assert derived.dataframe["x"].tolist() == [1, 2]

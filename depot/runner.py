@@ -11,6 +11,8 @@ convenient way in.
 """
 from __future__ import annotations
 
+import contextlib
+import threading
 import time
 from typing import Callable
 
@@ -22,6 +24,31 @@ from .decide import Decision, decide
 from .graph import topological
 
 Event = Callable[[str, Decision], None]
+
+_locks: dict[str, threading.Lock] = {}
+_held = threading.local()
+
+
+@contextlib.contextmanager
+def _exclusive(dts: Dataset):
+    """One runner per node at a time: across threads, and across processes.
+
+    Two sessions over the same dataset would each go to the source and each
+    write the same files. The second waits, reads the metafile the first left,
+    and finds the node up to date. A thread that already holds the node — a
+    transform calling ``ref.load()`` against the rules — goes straight in
+    rather than waiting on itself.
+    """
+    held = _held.__dict__.setdefault("keys", set())
+    if dts.key in held:
+        yield
+        return
+    with _locks.setdefault(dts.key, threading.Lock()), cache.lock(dts):
+        held.add(dts.key)
+        try:
+            yield
+        finally:
+            held.discard(dts.key)
 
 
 def _probe_value(dts: Dataset) -> float | None:
@@ -123,6 +150,7 @@ def run(
     *targets: Dataset,
     force: bool = False,
     on_event: Event | None = None,
+    keep_going: bool = False,
 ) -> list[Decision]:
     """Bring the targets and everything they depend on up to date.
 
@@ -132,10 +160,28 @@ def run(
     called with ``("started", decision)`` and ``("finished", decision)``
     around every node, in execution order, so a UI can follow along; the
     returned decisions are the same objects, complete.
+
+    A failure stops the run, unless ``keep_going``: then the node that raised
+    carries the error in its decision, whatever depends on it is not run —
+    it could only be computed over data that failed — and everything else
+    still is. One dead API should not leave the rest of a depot stale.
     """
     decisions = []
+    failed: set[str] = set()
     for dts in topological(*targets):
-        decision = _run_one(dts, force=force, on_event=on_event)
+        broken = [r.key for r in dts.refs if r.key in failed]
+        if broken:
+            failed.add(dts.key)
+            decisions.append(Decision(dts, reasons=[f"not run: {k} failed" for k in broken]))
+            continue
+        try:
+            with _exclusive(dts):
+                decision = _run_one(dts, force=force, on_event=on_event)
+        except Exception as exc:
+            if not keep_going:
+                raise
+            failed.add(dts.key)
+            decision = Decision(dts, reasons=["failed"], error=f"{type(exc).__name__}: {exc}")
         decisions.append(decision)
     return decisions
 
@@ -158,6 +204,15 @@ def _run_one(dts: Dataset, force: bool, on_event: Event | None) -> Decision:
 
     try:
         stored = cache.read_meta(dts)
+        if cache.file_digest(dts.source) != dts._source_digest:
+            # This process holds the code it imported, and the file now says
+            # something else. Running would store the old code's output under
+            # the new code's name, and the next process would call it current.
+            decision.reasons.append("module edited after import")
+            raise RuntimeError(
+                f"{dts.key}: {dts.source.name} changed after this process "
+                f"imported it — restart to run the new code"
+            )
         try:
             probe_value = _probe_value(dts)
         except Exception as exc:

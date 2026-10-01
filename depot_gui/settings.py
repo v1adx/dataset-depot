@@ -7,6 +7,7 @@ layout? Layout lives in theme.py and is not a setting.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +26,12 @@ class Settings:
     colors: dict[str, str] = field(default_factory=dict)
     title: str = "Datasets"
     port: int = 9000
+    # The one password every page and endpoint sits behind — the browser's own
+    # prompt, any user name. Out of the environment unless given, the way
+    # depot.config reads DEPOT_SOURCE; unset, the interface is open as before.
+    password: str | None = field(
+        default_factory=lambda: os.getenv("DEPOT_GUI_PASSWORD") or None, repr=False
+    )
 
     UNKNOWN_COLOR = "#A5A5A5"
 

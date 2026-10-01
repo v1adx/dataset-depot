@@ -68,7 +68,9 @@ class DatasetIndex(Dataset):
         its own output, for as long as it existed.
         """
         own = cache.meta_path(d)
-        watched = _matching(str(Path(d.root) / "**" / "*.py"))
+        # The root itself too: an empty depot watches nothing else, and a
+        # probe answering 0 would never build the table at all.
+        watched = [str(d.root)] + _matching(str(Path(d.root) / "**" / "*.py"))
         watched += [str(p) for p in config.cache_dir().rglob("*.meta") if p != own]
         return max((_mtime(p) for p in watched), default=0.0)
 
@@ -141,7 +143,9 @@ class DatasetIndex(Dataset):
         """Bring every dataset in the depot up to date, then describe what came out.
 
         One walk of the graph, not a loop of runs: the runner takes the whole
-        depot at once and touches each node once. A loop would recompute a
+        depot at once and touches each node once. It keeps going past a
+        failure, so one broken source leaves the rest fresh, and raises at the
+        end naming whatever failed. A loop would recompute a
         shared source once per dependant, and under ``force`` send it back to
         its API that many times.
 
@@ -151,9 +155,12 @@ class DatasetIndex(Dataset):
         afterwards, unforced: the work has just been done, and ``force`` here
         would only do it again.
         """
-        run(*self._every_other_dataset(), force=force)
+        decisions = run(*self._every_other_dataset(), force=force, keep_going=True)
         self.reload()
         self.pipeline()
+        failures = [f"{d.dataset.key}: {d.error}" for d in decisions if d.error]
+        if failures:
+            raise RuntimeError("; ".join(failures))
 
     def run_all_forced(self, _: Dataset | None = None) -> None:
         """``run_all``, recomputing regardless of freshness.

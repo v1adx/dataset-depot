@@ -49,7 +49,10 @@ def render(decisions: list[Decision], target: str | None = None) -> str:
     lines = []
     for d in decisions:
         indent = "  " * depth[d.dataset.key]
-        if executed:
+        reason = f"{d.reason}: {d.error}" if d.error else d.reason
+        if d.error:
+            status = "FAILED"
+        elif executed:
             status = _elapsed(d.elapsed) if d.works else "·"
         elif not d.works:
             status = "skip"
@@ -57,11 +60,14 @@ def render(decisions: list[Decision], target: str | None = None) -> str:
             # Only a ref woke it, and a ref that runs may still produce the
             # same content and never move. Nothing short of running can tell.
             status = "run" if d.certain else "maybe"
-        lines.append(f"  {indent}{d.dataset.key:<{width - 2 * depth[d.dataset.key]}}  {status:>7}  {d.reason}")
+        lines.append(f"  {indent}{d.dataset.key:<{width - 2 * depth[d.dataset.key]}}  {status:>7}  {reason}")
 
     if executed:
         header = (f"{target or decisions[-1].dataset.key} · {len(ran)} of {len(decisions)} "
                   f"ran in {_elapsed(sum(d.elapsed for d in decisions))}")
+        failures = sum(1 for d in decisions if d.error)
+        if failures:
+            header += f", {failures} failed"
     else:
         certain = [d for d in ran if d.certain]
         maybe = len(ran) - len(certain)

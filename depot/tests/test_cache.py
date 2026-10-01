@@ -289,3 +289,24 @@ def test_the_defaults_do_not_name_anybody_s_project(monkeypatch):
 
     assert config.source() == Path("datasets")
     assert config.cache_dir() == Path(".depot/cache")
+
+
+# --- a write is all or nothing ------------------------------------------------
+
+def test_a_write_that_dies_halfway_leaves_the_stored_data_whole(tmp_path, monkeypatch):
+    config.set_cache_dir(tmp_path)
+    d = _dts()
+    d.dataframe = pd.DataFrame({"x": [1]})
+    cache.save(d)
+
+    def torn(self, path, *args, **kwargs):
+        Path(path).write_bytes(b"PAR1 half a file")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", torn)
+    d.dataframe = pd.DataFrame({"x": [2]})
+    with pytest.raises(OSError):
+        cache.save(d)
+
+    assert cache.load(d)["x"].tolist() == [1]
+    assert not list(cache.data_path(d).parent.glob("*.tmp"))

@@ -209,14 +209,23 @@ def cmd_plan(args) -> None:
 
 
 def cmd_run(args) -> None:
-    dts = _target(args.name)
-    decisions = run_pipeline(dts, force=args.force)
+    # One dataset stops at its first failure: nothing past it can be current.
+    # The whole depot keeps going, so one dead source leaves the rest fresh.
+    if args.name:
+        targets, label = [_target(args.name)], None
+    else:
+        scan = registry.discover()
+        _warn_about(scan)
+        targets, label = [f.dataset for f in scan.found.values()], "depot"
+    decisions = run_pipeline(*targets, force=args.force, keep_going=not args.name)
     payload = [
         {"key": d.dataset.key, "worked": d.works, "elapsed": d.elapsed,
-         "reason": d.reason, "extras": d.extras_ran}
+         "reason": d.reason, "extras": d.extras_ran, "error": d.error}
         for d in decisions
     ]
-    _emit(payload, args.json, render(decisions, dts.key))
+    _emit(payload, args.json, render(decisions, label or targets[0].key))
+    if any(d.error for d in decisions):
+        sys.exit(1)
 
 
 def cmd_reset(args) -> None:
@@ -319,7 +328,7 @@ def main(argv: list[str] | None = None) -> None:
     forced = "recompute regardless of freshness — reaches the refs too, so a source on the far end will be fetched again"
     add("plan", "what a run would do, and why", cmd_plan, "required").add_argument(
         "--force", action="store_true", help=forced)
-    add("run", "bring a dataset and its refs up to date", cmd_run, "required").add_argument(
+    add("run", "bring a dataset and its refs up to date — the whole depot if omitted", cmd_run).add_argument(
         "--force", action="store_true", help=forced)
     add("reset", "drop what is stored, so the next run rebuilds", cmd_reset, "required")
     add("graph", "the shape of the depot, or of one subgraph", cmd_graph).add_argument(
@@ -338,11 +347,8 @@ def main(argv: list[str] | None = None) -> None:
     # installed package's own tree — a directory that has nothing to do with the
     # project being run and, once this package is installed from elsewhere, never
     # reaches the project's .env at all.
-    try:
-        from dotenv import find_dotenv, load_dotenv
-        load_dotenv(find_dotenv(usecwd=True))
-    except ImportError:
-        pass
+    from dotenv import find_dotenv, load_dotenv
+    load_dotenv(find_dotenv(usecwd=True))
 
     # The banner is printed on every run, so it is the one place where a
     # misconfigured source costs nothing to notice: a root that is not there

@@ -732,3 +732,105 @@ def test_force_says_when_it_recomputed_and_stored_nothing():
 
     assert "recomputed, not stored" in decision.reason
     assert cache.read_meta(derived).changed == stored.changed
+
+
+def test_code_edited_after_import_refuses_to_run(tmp_path):
+    """A long-lived process holds the code it imported. Running it after the
+    file changed stored the old code's output under the new code's
+    fingerprint, and a fresh process then called that up to date."""
+    body = ("import pandas as pd\n"
+            "from depot import Dataset\n"
+            "dts = Dataset(name='m', type='t', threshold=3600,\n"
+            "              extractors=[lambda d: setattr(d, 'dataframe', pd.DataFrame({{'n': [{v}]}}))])\n")
+    path, old = _module(tmp_path, body.format(v=1))
+    run(old)
+    path.write_text(body.format(v=2), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="restart"):
+        run(old)
+
+    _, fresh = _module(tmp_path, body.format(v=2))
+    assert "module changed" in run(fresh)[0].reason
+    assert fresh.dataframe["n"].tolist() == [2]
+
+
+# --- one node at a time -------------------------------------------------------
+
+def test_two_threads_on_one_dataset_go_to_the_source_once():
+    import threading
+    import time
+
+    calls = []
+
+    def slow(d):
+        calls.append(1)
+        time.sleep(0.2)
+        d.dataframe = pd.DataFrame({"x": [1]})
+
+    src = Dataset(name="api", type="raw", threshold=3600, extractors=[slow])
+    threads = [threading.Thread(target=run, args=(src,)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1
+
+
+# --- another process on the same cache ----------------------------------------
+
+def test_a_version_another_process_stored_is_what_this_one_serves():
+    """A long-lived process keeps its objects; the CLI next door moves the data.
+    Loading here must give the data the cache now holds, not what this object
+    remembers from its own last run."""
+    here = Dataset(name="api", type="raw", threshold=3600, extractors=[_brings({"n": [1]})])
+    run(here)
+    there = Dataset(name="api", type="raw", threshold=3600, extractors=[_brings({"n": [2]})])
+    run(there, force=True)
+
+    decisions = run(here)
+    assert not decisions[0].works  # the other process's visit counts here too
+    assert here.dataframe["n"].tolist() == [2]
+
+
+def test_a_ref_moved_by_another_process_wakes_the_dependant_here():
+    src = Dataset(name="src", type="raw", threshold=3600, extractors=[_brings({"n": [1]})])
+    top = Dataset(name="top", type="t", refs=[src],
+                  transforms=[lambda d: setattr(d, "dataframe", src.dataframe)])
+    run(top)
+    Dataset(name="src", type="raw", threshold=3600,
+            extractors=[_brings({"n": [2]})]).pipeline(force=True)
+
+    run(top)
+    assert top.dataframe["n"].tolist() == [2]
+
+
+def test_a_dataset_another_process_holds_is_waited_for():
+    import threading
+    import time
+
+    extract = _counter()
+    d = Dataset(name="api", type="raw", threshold=3600, extractors=[extract])
+    with cache.lock(d):
+        worker = threading.Thread(target=run, args=(d,))
+        worker.start()
+        time.sleep(0.3)
+        assert extract.calls == []
+    worker.join(5)
+    assert len(extract.calls) == 1
+
+
+# --- keep going ----------------------------------------------------------------
+
+def test_keep_going_runs_everything_that_does_not_depend_on_the_failure():
+    def boom(d):
+        raise ValueError("api down")
+
+    bad = Dataset(name="bad", type="raw", threshold=0, extractors=[boom])
+    below = Dataset(name="below", type="t", refs=[bad], transforms=[_counter()])
+    good = Dataset(name="good", type="raw", threshold=0, extractors=[_counter()])
+
+    decisions = {d.dataset.key: d for d in run(below, good, keep_going=True)}
+
+    assert "api down" in decisions["raw:bad"].error
+    assert not decisions["t:below"].works and "raw:bad" in decisions["t:below"].reason
+    assert decisions["raw:good"].works and not decisions["raw:good"].error

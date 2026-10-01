@@ -23,8 +23,12 @@ which columns were encoded.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -91,23 +95,80 @@ def read_meta(dts: Dataset) -> Meta:
         return Meta()
 
 
-def _write_meta(dts: Dataset, meta: Meta) -> None:
-    path = meta_path(dts)
+def _replace(path: Path, write) -> None:
+    """Write beside the target, then swap it in: a reader — or a crash — sees
+    the old file or the new one, never half of one.
+
+    ponytail: on Windows os.replace fails loudly while another handle has the
+    target open for reading; retry there if that ever starts to bite.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "timestamp": meta.timestamp,
-                "changed": meta.changed,
-                "nested": meta.nested,
-                "schema": meta.schema,
-                "shape": list(meta.shape) if meta.shape else None,
-                "digest": meta.digest,
-                "source": meta.source,
-            }
-        ),
-        encoding="utf-8",
+    # Named rather than mkstemp'd: mkstemp creates the file 0600, and the swap
+    # would hand that to the cache. An ordinary open keeps the umask's say.
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        write(tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _write_meta(dts: Dataset, meta: Meta) -> None:
+    text = json.dumps(
+        {
+            "timestamp": meta.timestamp,
+            "changed": meta.changed,
+            "nested": meta.nested,
+            "schema": meta.schema,
+            "shape": list(meta.shape) if meta.shape else None,
+            "digest": meta.digest,
+            "source": meta.source,
+        }
     )
+    _replace(meta_path(dts), lambda tmp: Path(tmp).write_text(text, encoding="utf-8"))
+    dts._seen = (meta.timestamp, meta.changed)
+
+
+@contextlib.contextmanager
+def lock(dts: Dataset):
+    """Hold this dataset against every other process on the same cache.
+
+    A lock file beside the metafile, locked by the operating system, so a
+    process that dies lets go with it. The runner takes it around each node;
+    whoever waited then reads the metafile afresh and, as a rule, finds the
+    work done.
+
+    ponytail: waits without a timeout — a process hung inside a node holds it
+    up for as long as it hangs.
+    """
+    path = _stem(dts).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            while True:
+                try:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _nested_columns(df: pd.DataFrame) -> list[str]:
@@ -158,19 +219,28 @@ def load(dts: Dataset) -> pd.DataFrame:
     return df
 
 
+def file_digest(path: Path | str | None) -> str:
+    """sha1 of a file's bytes; "" when there is no file to read."""
+    if path is None:
+        return ""
+    try:
+        return hashlib.sha1(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def source_digest(dts: Dataset) -> str:
     """A fingerprint of the module that declared the dataset.
 
     The code is an input like any other. Without this, editing a transform
     leaves the old parquet in place and the runner sees nothing to do — the
     dataset quietly serves data its own module can no longer produce.
+
+    It is the code this process imported, taken when the dataset was built,
+    not whatever the file holds now: a long-lived process running old code
+    must not store its output under the new code's name.
     """
-    if dts.source is None:
-        return ""
-    try:
-        return hashlib.sha1(Path(dts.source).read_bytes()).hexdigest()
-    except OSError:
-        return ""
+    return dts._source_digest
 
 
 def _digest(df: pd.DataFrame) -> str:
@@ -250,13 +320,11 @@ def _encode(df: pd.DataFrame, nested: list[str]) -> pd.DataFrame:
 
 
 def _write_parquet(dts: Dataset, encoded: pd.DataFrame) -> None:
-    path = data_path(dts)
-    path.parent.mkdir(parents=True, exist_ok=True)
     # The index goes with it. pandas stores a plain RangeIndex as metadata and
     # anything else as a column, so this costs nothing for the usual case and
     # keeps a meaningful index — a remote table keyed by id, say — intact. A
     # frame whose index is looked up by .map() is a different frame without it.
-    encoded.to_parquet(path)
+    _replace(data_path(dts), lambda tmp: encoded.to_parquet(tmp))
 
 
 def drop(dts: Dataset) -> None:

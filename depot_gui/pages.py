@@ -6,9 +6,14 @@ function, start(), and the components have no idea the pages exist.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import secrets
 from typing import Callable
 
 from nicegui import Client, app, ui
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from depot import Decision
 
@@ -65,8 +70,35 @@ def node_painter(flow: FlowGraph) -> Callable[[str, Decision | None], None]:
     return on_node
 
 
+class BasicAuth(BaseHTTPMiddleware):
+    """One password in front of every page and endpoint: the browser's own
+    prompt, any user name, no login page and no session to keep.
+
+    The websocket is not checked here and need not be — NiceGUI accepts one
+    only for a client that a page, served behind this check, has created.
+    Over plain http the password travels readably: fine for a home network,
+    not for someone else's.
+    """
+
+    def __init__(self, app, password: str) -> None:
+        super().__init__(app)
+        self._password = password.encode()
+
+    async def dispatch(self, request, call_next):
+        scheme, _, value = request.headers.get("authorization", "").partition(" ")
+        try:
+            supplied = base64.b64decode(value, validate=True).partition(b":")[2]
+        except binascii.Error:
+            supplied = b""
+        if scheme.lower() == "basic" and secrets.compare_digest(supplied, self._password):
+            return await call_next(request)
+        return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="depot"'})
+
+
 def start(settings: Settings) -> None:
     configure(settings)
+    if settings.password:
+        app.add_middleware(BasicAuth, password=settings.password)
     mount_artifacts()
     catalog = Catalog(settings)
     positions = StateFile(settings.state / "layout.json")

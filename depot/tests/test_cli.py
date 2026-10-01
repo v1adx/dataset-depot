@@ -269,3 +269,25 @@ def test_env_is_read_from_the_working_directory_not_the_package(tmp_path, monkey
 
     main(["ls"])
     assert "depotdata:thing" in _out(capsys)
+
+
+def test_run_without_a_name_runs_the_whole_depot(depot_tree, capsys):
+    main(["run", "--json"])
+    assert {d["key"] for d in _json(capsys)} == {"raw:source", "marts:top"}
+
+
+def test_one_failure_does_not_stop_the_rest_of_the_depot_and_is_reported(depot_tree, capsys):
+    (depot_tree / "raw" / "broken.py").write_text(
+        "from depot import Dataset\n"
+        "def boom(d):\n"
+        "    raise ValueError('api down')\n"
+        "dts = Dataset(threshold=0, extractors=[boom])\n",
+        encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exited:
+        main(["run", "--json"])
+
+    assert exited.value.code == 1
+    rows = {d["key"]: d for d in _json(capsys)}
+    assert "api down" in rows["raw:broken"]["error"]
+    assert rows["marts:top"]["worked"]

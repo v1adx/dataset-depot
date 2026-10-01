@@ -7,7 +7,7 @@ def test_up_to_date_does_nothing():
     d.timestamp = 1000.0
     d.changed = 1000.0
     r = decide(d, now=1100.0)
-    assert not r.extract and not r.transform and not r.validate
+    assert not r.extract and not r.transform
     assert not r.works
     assert r.reason == "up to date"
 
@@ -17,7 +17,7 @@ def test_force_wakes_extract_transform_validate():
     d.timestamp = 1000.0
     d.changed = 1000.0
     r = decide(d, force=True, now=1100.0)
-    assert r.extract and r.transform and r.validate
+    assert r.extract and r.transform
     assert "force" in r.reason
 
 
@@ -25,7 +25,7 @@ def test_probe_newer_wakes_extract_not_transform():
     d = Dataset(name="x", type="t", probe=lambda _: 0.0)
     d.changed = 1000.0
     r = decide(d, probe_value=2000.0, now=3000.0)
-    assert r.extract and r.validate
+    assert r.extract
     assert not r.transform
     assert r.probe_moved
     assert "probe" in r.reason
@@ -43,7 +43,7 @@ def test_timer_wakes_extract():
     d = Dataset(name="x", type="t", threshold=100)
     d.timestamp = 1000.0
     r = decide(d, now=1100.0)
-    assert r.extract and r.validate
+    assert r.extract
     assert not r.transform
     assert "source outdated" in r.reason
 
@@ -84,7 +84,7 @@ def test_ref_newer_wakes_extract_and_transform():
     d = Dataset(name="x", type="t", refs=[ref])
     d.changed = 1000.0
     r = decide(d, now=3000.0)
-    assert r.extract and r.transform and r.validate
+    assert r.extract and r.transform
     assert r.refs_moved
     assert "ref t:r" in r.reason
 

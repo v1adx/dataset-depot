@@ -63,6 +63,13 @@ to a database or a spreadsheet and only metadata is kept. Then an empty datafram
 downstream wakes. The runner empties it before every extract, so an empty frame
 always means this run.
 
+Nothing is stored, so between the runner's visits there is nothing to open:
+reading `.dataframe` then re-runs the extractors and transforms on the spot.
+That is a trip to the source `threshold` does not count — it schedules only the
+runner's visits. If the source must not be asked more often than that (quotas,
+paid or slow calls), use `cache=True`. An incremental loader, asked cold,
+answers with a tail or nothing: do not read one as a ref.
+
 **A dataset with no extractors takes its version from its refs.** It fetched
 nothing, so its data is its inputs rearranged. Recomputing from unchanged
 inputs lands on the same version and stirs nothing. You do not set versions by
@@ -85,6 +92,8 @@ belongs under `if __name__ == "__main__":`.
     depot check <name>     what looks wrong in the declaration
     depot plan <name>      what a run would do, and why — no side effects
     depot run <name>       do it
+    depot run              the whole depot; one failing dataset stops only
+                           what depends on it, and the exit code says so
     depot reset <name>     throw away what is stored
 
 `--force` on plan or run recomputes regardless of freshness. It reaches the
@@ -103,7 +112,9 @@ You rarely need `reset`. Editing a module is noticed on its own — the runner
 fingerprints the file that declared the dataset, so changing it is a reason to
 recompute, and if the output comes out identical the version stays put and
 nothing downstream is disturbed. `reset` is for throwing away a result you know
-to be wrong.
+to be wrong. A long-lived process — the interface, a notebook — that imported
+the module before the edit still holds the old code, so it refuses to run that
+dataset and says to restart.
 
 `plan` distinguishes `run` from `maybe`: a timer or probe firing is certain,
 while a dataset woken only by a ref may find its ref produced the same content
