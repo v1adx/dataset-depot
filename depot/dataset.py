@@ -396,6 +396,10 @@ class Dataset:
                 print(df.head(rows).to_string())
         print("=" * 80)
 
+    def log(self, message: str) -> None:
+        """Print a message about a dataset.
+        """
+        print(f"[{self.key}] {message}")
 
     def get_age(self) -> str:
         return _format_age(time.time() - self.changed) if self.changed else "never"
