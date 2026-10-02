@@ -68,11 +68,13 @@ class DatasetIndex(Dataset):
         its own output, for as long as it existed.
         """
         own = cache.meta_path(d)
-        # The root itself too: an empty depot watches nothing else, and a
-        # probe answering 0 would never build the table at all.
-        watched = [str(d.root)] + _matching(str(Path(d.root) / "**" / "*.py"))
+        watched = _matching(str(Path(d.root) / "**" / "*.py"))
         watched += [str(p) for p in config.cache_dir().rglob("*.meta") if p != own]
-        return max((_mtime(p) for p in watched), default=0.0)
+        # The root only when there is nothing else: an empty depot watches
+        # nothing, and a probe answering 0 would never build the table at all.
+        # Not beside the rest — importing the modules writes __pycache__ into
+        # it, and the index would wake itself with its own first run.
+        return max((_mtime(p) for p in watched), default=_mtime(str(d.root)))
 
     @staticmethod
     def describe(found: registry.Found, layer: int, dependants: int) -> dict:
