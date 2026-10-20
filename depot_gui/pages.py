@@ -330,7 +330,7 @@ async def _view_page(key: str, catalog, store: ViewStore, view_id: str) -> None:
 async def _dataset_page(key: str, catalog) -> None:
     ui.query("body").style("margin:0;overflow:hidden;")
 
-    holder: dict = {"settings": None, "filter": None}
+    holder: dict = {"settings": None, "filter": None, "table": None}
     with _page_header(key, lambda: ui.navigate.back()):
         _run_button(key, catalog)
         ui.button(
@@ -341,6 +341,10 @@ async def _dataset_page(key: str, catalog) -> None:
             icon="settings",
             on_click=lambda: holder["settings"] and holder["settings"].open(),
         ).props("flat round dense size=sm").tooltip("Columns")
+        ui.button(
+            icon="download",
+            on_click=lambda: holder["table"] and holder["table"].export_csv(),
+        ).props("flat round dense size=sm").tooltip("Export CSV")
 
     try:
         dts = catalog.dataset(key)
@@ -353,5 +357,6 @@ async def _dataset_page(key: str, catalog) -> None:
     table.refresh(dts)
     table.build()
 
+    holder["table"] = table
     holder["settings"] = TabulatorPageSettings(table, dts)
     holder["filter"] = TabulatorFilter(table)

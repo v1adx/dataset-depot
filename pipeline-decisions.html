@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Depot Run Decisions</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column; each figure scrolls sideways on its own if wider than the screen */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1b2230; --muted: #5a6577;
+  --line: #d9dee6; --accent: #2b6cb0;
+  --sans: "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e8ef; --muted: #98a3b3;
+  --line: #2c3542; --accent: #6aa8e8; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e8ef; --muted: #98a3b3;
+  --line: #2c3542; --accent: #6aa8e8; color-scheme: dark }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 var(--sans); padding: 0 16px; }
+main { max-width: 980px; margin: 0 auto; padding-block: 40px 64px; display: grid; gap: 48px; }
+header { display: grid; gap: 12px; max-width: 68ch; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; }
+.eyebrow { font: 600 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+code { font: 13px var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+section { display: grid; gap: 14px; }
+figure { margin: 0; display: grid; gap: 10px; }
+/* Mermaid sizes shapes for its own font: the chart sets no font of its own */
+.chart { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 20px; overflow-x: auto;
+  line-height: normal; }
+.chart pre { margin: 0; text-align: center; }
+figcaption { color: var(--muted); font-size: 14px; max-width: 72ch; }
+.phases { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 14px; }
+.phases b { color: var(--accent); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+td:first-child { font-family: var(--mono); font-size: 13px; white-space: nowrap; color: var(--accent); }
+ul { margin: 0; padding-left: 20px; max-width: 68ch; display: grid; gap: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">depot · pipeline</div>
+    <h1>How the pipeline decides what to run</h1>
+    <p>First the full set of phases for one node, then level by level: walking the graph, a node's verdict, execution, and the rule that moves a dataset's version.</p>
+    <div class="phases">
+      <span><b>Extract</b> — fetch data from the source</span>
+      <span><b>Transform</b> — recompute from inputs</span>
+      <span><b>Validate</b> — validators, before any write</span>
+      <span><b>Deliver</b> — send the result outward</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="eyebrow">Overview</div>
+    <h2>A node's phases, start to finish</h2>
+    <figure>
+      <div class="chart"><pre class="mermaid">
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false}}}%%
+flowchart TD
+  S{"Any reason to work?"} -- no --> U["Node is up to date, nothing to do"]
+  S -- yes --> E["Extract"]
+  E -- "version moved or inputs changed" --> T["Transform"]
+  E -- "version unchanged" --> V["Validate"]
+  T --> V
+  V -- "version moved" --> W{"Data differs from cache?"}
+  W -- yes --> SAVE["Write to cache"]
+  SAVE --> X["Deliver"]
+  W -- no --> R["Version rolls back"]
+  V -- "version unchanged" --> Q["Remember when the source was visited"]
+  R --> Q
+  classDef hot stroke:#3b82c4,stroke-width:2px
+  class E,T,V,X hot
+      </pre></div>
+      <figcaption>Validation runs after any work and always before the write, so invalid data never reaches the cache. A failure at any step before the write rolls the version back, and the next run redoes the work. Delivery runs only when new data was written; a failure there no longer rolls the version back.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="eyebrow">Whole graph</div>
+    <h2>The order nodes are visited in</h2>
+    <figure>
+      <div class="chart"><pre class="mermaid">
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false}}}%%
+flowchart TD
+  A["Datasets to bring up to date"] --> B["Order the graph: dependencies first, each node once"]
+  B --> C{"Did a dependency fail?"}
+  C -- yes --> D["Skip the node and mark it failed"]
+  C -- no --> L["Take the node: one runner per node"]
+  L --> R["Run the node"]
+  R --> X{"Error?"}
+  X -- no --> OK["Record the outcome in the log"]
+  X -- yes --> K{"Keep going on errors?"}
+  K -- no --> STOP["Stop the whole run"]
+  K -- yes --> KF["Record the error and mark the node failed"]
+  D --> N{"Nodes left?"}
+  OK --> N
+  KF --> N
+  N -- yes --> C
+  N -- no --> Fin["Report for every node"]
+  classDef err stroke:#d0542b,stroke-width:2px
+  class STOP,KF,D err
+      </pre></div>
+      <figcaption>With keep-going on (<code>keep_going</code>), only the nodes that depend on the failed one are skipped; every other branch still runs. A source shared by several targets runs once. A second process over the same node waits for the first, then finds the node up to date.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="eyebrow">One node · verdict</div>
+    <h2>Why a node decides to work</h2>
+    <figure>
+      <div class="chart"><pre class="mermaid">
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false}}}%%
+flowchart TD
+  S["Node state"] --> F{"Forced run?"}
+  F -- yes --> Fy["Extract and transform"]
+  F -- no --> M
+  Fy --> M{"Module code changed?"}
+  M -- yes --> My["Extract and transform"]
+  M -- no --> P
+  My --> P{"Can the source report its version?"}
+  P -- yes --> P2{"Source newer than the data?"}
+  P2 -- yes --> P2y["Extract"]
+  P -- no --> T{"Is a shelf life set?"}
+  T -- yes --> T0{"Source never visited?"}
+  T0 -- yes --> T0y["Extract"]
+  T0 -- no --> T1{"Shelf life expired?"}
+  T1 -- yes --> T1y["Extract"]
+  P2 -- no --> RF
+  P2y --> RF
+  T -- no --> RF
+  T0y --> RF
+  T1 -- no --> RF
+  T1y --> RF
+  RF{"Dependency newer than the data?"}
+  RF -- yes --> RFy["Extract and transform"]
+  RF -- no --> Fin["Verdict ready"]
+  RFy --> Fin
+  classDef hot stroke:#3b82c4,stroke-width:2px
+  class Fy,My,P2y,T0y,T1y,RFy hot
+      </pre></div>
+      <figcaption>Conditions add up: each one that fires adds its phases and a reason line to the log. If none fires, the node is up to date. When the source can report its version, the shelf life is not checked at all. A new node needs no branch of its own: its version is zero, so any answer from the source or any dependency is already newer.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="eyebrow">One node · execution</div>
+    <h2>What happens after the verdict</h2>
+    <figure>
+      <div class="chart"><pre class="mermaid">
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false}}}%%
+flowchart TD
+  A["Read the node's state from disk"] --> B{"Module edited since the process started?"}
+  B -- yes --> Bx["Error: restart the process"]
+  B -- no --> C["Ask the source for its version"]
+  C -- "no answer" --> Cx["Error: source unavailable"]
+  C --> D["Reach the verdict"]
+  D --> E{"Extract needed?"}
+  E -- yes --> E1["Extract"]
+  E1 --> E3{"Data arrived without its own version?"}
+  E3 -- yes --> E4["Assign a version by the rule"]
+  E3 -- no --> E5
+  E4 --> E5{"Version moved?"}
+  E5 -- yes --> E5y["Add transform"]
+  E5 -- no --> T
+  E5y --> T
+  E -- no --> T{"Transform needed?"}
+  T -- yes --> T1["Transform"]
+  T -- no --> V
+  T1 --> V{"Was there any work?"}
+  V -- yes --> V1["Validate"]
+  V -- no --> MV
+  V1 --> MV{"Version moved?"}
+  MV -- yes --> SV{"Data matches the cache?"}
+  SV -- no --> SVn["Write to cache"]
+  SVn --> XR["Deliver"]
+  SV -- yes --> SVy["Don't store, roll the version back"]
+  MV -- no --> FR{"Forced run?"}
+  FR -- yes --> FRy["Recomputed, not stored"]
+  FR -- no --> TC
+  SVy --> TC
+  FRy --> TC{"Was the source visited?"}
+  TC -- yes --> TCy["Remember the visit time"]
+  TC -- no --> Fin["Node done"]
+  TCy --> Fin
+  XR --> Fin
+  classDef err stroke:#d0542b,stroke-width:2px
+  classDef hot stroke:#3b82c4,stroke-width:2px
+  class Bx,Cx err
+  class E1,T1,V1,XR hot
+      </pre></div>
+      <figcaption>A node without a cache has its data cleared before extracting: an empty result means nothing new arrived, and the version stays put. The visit time is stored so the shelf life does not restart after a restart. For old nodes without a code fingerprint, this step also records one.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="eyebrow">Version</div>
+    <h2>What version new data gets</h2>
+    <figure>
+      <div class="chart"><pre class="mermaid">
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false}}}%%
+flowchart TD
+  A{"Source reported a newer version?"} -- yes --> A1["The source's version"]
+  A -- no --> B{"Module code changed?"}
+  B -- yes --> B1["Current time"]
+  B -- no --> C{"Node only recomputes its dependencies?"}
+  C -- yes --> C1["Newest dependency version"]
+  C -- no --> D{"Dependencies changed, or source has no version?"}
+  D -- yes --> D1["Current time"]
+  D -- no --> D2["Previous version"]
+  A1 --> Z["Never older than any dependency"]
+  B1 --> Z
+  C1 --> Z
+  D1 --> Z
+  D2 --> Z
+  classDef hot stroke:#3b82c4,stroke-width:2px
+  class C1,Z hot
+      </pre></div>
+      <figcaption>A version moves only when the inputs move, never just because code ran. A derived node inherits its dependencies' version, so recomputing from the same inputs lands on the same version and nothing downstream stirs. The floor at the dependencies' versions keeps a node from being older than its own inputs; otherwise it would rebuild on every run.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="eyebrow">Log</div>
+    <h2>What each reason in the log means</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Reason</th><th>Phases</th><th>When it appears</th></tr></thead>
+        <tbody>
+          <tr><td>force</td><td>all</td><td>forced run; the data is stored only if the version actually moved</td></tr>
+          <tr><td>module changed</td><td>all</td><td>the module's code differs from the code that produced the stored data</td></tr>
+          <tr><td>probe moved</td><td>extract, validate</td><td>the source reported a version newer than the data</td></tr>
+          <tr><td>first run</td><td>extract, validate</td><td>the node has a shelf life and its source was never visited</td></tr>
+          <tr><td>source outdated</td><td>extract, validate</td><td>the shelf life has passed since the last visit to the source</td></tr>
+          <tr><td>ref &lt;key&gt;</td><td>all</td><td>a dependency is newer than the node's data</td></tr>
+          <tr><td>content unchanged</td><td>no delivery</td><td>work ran but the data matched the cache; the version was rolled back</td></tr>
+          <tr><td>recomputed, not stored</td><td>no delivery</td><td>forced recompute from unchanged inputs: nothing to store</td></tr>
+          <tr><td>probe failed: …</td><td>none</td><td>the source did not answer the version question</td></tr>
+          <tr><td>module edited after import</td><td>none</td><td>the module's code was edited after the process started</td></tr>
+          <tr><td>not run: &lt;key&gt; failed</td><td>none</td><td>a dependency failed while the run keeps going on errors</td></tr>
+          <tr><td>up to date</td><td>none</td><td>no reason fired</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Transform is also added after extract when extracting moved the version. Delivery follows any phase once new data is written to the cache.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Dry run</div>
+    <h2>How a dry run differs from a real one</h2>
+    <ul>
+      <li>The verdict and the version rule are shared, so a dry run and a real run cannot drift apart. Sources are asked for their version and state is read from disk; nothing else runs and nothing is written.</li>
+      <li>Versions are projected forward through the graph: each node is judged against what its dependencies <em>will</em> become.</li>
+      <li>Extract does not run, so the projection misses three things: a version the extractor would set itself, an empty answer from the source, and data that matches the cache. A dry run may show more work than a real run does, never less.</li>
+    </ul>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default",
+  });
+</script>
+</body>
+</html>

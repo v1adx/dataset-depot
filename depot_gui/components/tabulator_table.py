@@ -392,6 +392,17 @@ class TabulatorTable:
             }}
         """)
 
+    def export_csv(self) -> None:
+        """Download the currently filtered/sorted rows as CSV (Excel-friendly)."""
+        filename = json.dumps(self._dts_key.replace("/", "_") + ".csv")
+        ui.run_javascript(f"""
+            var el = document.getElementById('{self._container_id}');
+            var table = el && el._tabulator;
+            if (table) {{
+                table.download("csv", {filename}, {{delimiter: ";", bom: true}});
+            }}
+        """)
+
     def unique_values(self, field: str) -> list[str] | None:
         """Return distinct non-null values for `field` if there are fewer than 10, else None."""
         return _unique_values(self._data, field)
